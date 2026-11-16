@@ -1,0 +1,69 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function anonymous() { return signedIn() && request.auth.token.firebase.sign_in_provider == 'anonymous'; }
+    function admin() {
+      return signedIn() && request.auth.token.firebase.sign_in_provider != 'anonymous'
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+    function event(id) { return get(/databases/$(database)/documents/events/$(id)); }
+    function owner(id) { return admin() && event(id).data.createdBy == request.auth.uid; }
+    function ownerAfter(id) { return admin() && getAfter(/databases/$(database)/documents/events/$(id)).data.createdBy == request.auth.uid; }
+
+    match /admins/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid && !anonymous();
+      allow list, create, update, delete: if false;
+    }
+    // The operator provisions the reference manually; never shipped in the web app.
+    match /private/{docId} {
+      allow get: if admin() && docId == 'reference';
+      allow list, create, update, delete: if false;
+    }
+    match /events/{eventId} {
+      allow get: if signedIn();
+      allow list: if admin();
+      allow create: if admin() && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.status == 'waiting'
+        && request.resource.data.questionStatus == 'locked'
+        && request.resource.data.questionIndex == 0
+        && request.resource.data.round == 0;
+      allow update, delete: if owner(eventId);
+      match /participants/{uid} {
+        allow get: if owner(eventId) || (anonymous() && request.auth.uid == uid);
+        allow list: if owner(eventId);
+        allow create: if anonymous() && request.auth.uid == uid
+          && event(eventId).data.status != 'completed'
+          && request.resource.data.keys().hasOnly(['joinedAt'])
+          && request.resource.data.joinedAt == request.time;
+        allow update, delete: if false;
+      }
+      match /rounds/{roundId}/votes/{uid} {
+        allow get: if owner(eventId) || (anonymous() && request.auth.uid == uid);
+        allow list: if owner(eventId);
+        allow create: if anonymous() && request.auth.uid == uid
+          && event(eventId).data.status == 'active'
+          && event(eventId).data.questionStatus == 'open'
+          && roundId == string(event(eventId).data.round)
+          && request.resource.data.keys().hasOnly(['option', 'questionIndex', 'createdAt'])
+          && request.resource.data.option in ['A', 'B', 'C']
+          && request.resource.data.option in event(eventId).data.allowedOptions
+          && request.resource.data.questionIndex == event(eventId).data.questionIndex
+          && request.resource.data.createdAt == request.time
+          && exists(/databases/$(database)/documents/events/$(eventId)/participants/$(uid));
+        allow update, delete: if false;
+      }
+      match /results/{questionId} {
+        allow get, list: if owner(eventId) || (signedIn() && event(eventId).data.status == 'completed');
+        allow create, update, delete: if owner(eventId);
+      }
+      match /design/{designId} {
+        allow get: if designId == 'current' && (owner(eventId) || (signedIn() && event(eventId).data.status == 'completed'));
+        allow list: if false;
+        allow create: if ownerAfter(eventId);
+        allow update, delete: if owner(eventId);
+      }
+    }
+    match /{document=**} { allow read, write: if false; }
+  }
+}
