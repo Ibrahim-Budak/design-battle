@@ -7,6 +7,14 @@ import '../auth/firebase_bootstrap.dart';
 import '../event/event_service.dart';
 import '../preview/domain/design_config.dart';
 import '../preview/food_preview.dart';
+import 'decision_explanations.dart';
+
+String _choiceLabel(int questionIndex, Object? choice) {
+  final index = choice is String ? const ['A', 'B', 'C'].indexOf(choice) : -1;
+  return index < 0
+      ? 'Geçersiz seçenek'
+      : DesignConfig.labels[questionIndex][index];
+}
 
 class ResultsPage extends StatelessWidget {
   final String? eventCode;
@@ -246,7 +254,18 @@ class _ResultsContentState extends State<_ResultsContent> {
                                         ),
                                         const SizedBox(height: 8),
                                         Text(
-                                          'Sınıf: ${byIndex[i]!['winner']} · Referans: ${byIndex[i]!['reference']} · ${byIndex[i]!['matches'] == true ? 'Eşleşti' : 'Farklı'}${byIndex[i]!['manual'] == true ? ' · Manuel karar' : ''}',
+                                          'Sınıf: ${byIndex[i]!['winner']} · ${_choiceLabel(i, byIndex[i]!['winner'])}',
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          'Referans: ${byIndex[i]!['reference']} · ${_choiceLabel(i, byIndex[i]!['reference'])}',
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          '${byIndex[i]!['winner'] == byIndex[i]!['reference'] ? 'Eşleşti' : 'Farklı'}${byIndex[i]!['manual'] == true ? ' · Manuel karar' : ''}',
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.w600,
+                                          ),
                                         ),
                                         const SizedBox(height: 8),
                                         for (final option in ['A', 'B', 'C'])
@@ -276,6 +295,14 @@ class _ResultsContentState extends State<_ResultsContent> {
                                               );
                                             },
                                           ),
+                                        DecisionExplanation(
+                                          questionIndex: i,
+                                          classChoice:
+                                              byIndex[i]!['winner'] as String,
+                                          referenceChoice:
+                                              byIndex[i]!['reference']
+                                                  as String,
+                                        ),
                                       ],
                                     ),
                                   ),

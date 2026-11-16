@@ -106,6 +106,9 @@ async function seed() {
     await waitText(host,q===10?'Sonuçları göster':'Oylamayı aç');console.log(`Soru ${q} tamamlandı`);
   }
   await click(host,'Sonuçları göster');await waitText(host,'3 / 10 eşleşme');await waitText(host,'Manuel karar');
-  assert.deepEqual(errors,[]);console.log('İki ayrı tarayıcı oturumu, 10 soru, 3/10 (test referansı): başarılı');
+  await waitText(host,'Referans neden A · Turuncu?');
+  const resultText = await host.locator('body').innerText();
+  assert(!resultText.includes('Referans neden B · Koyu tema?'),'Eşleşen soru için açıklama gösterilmemeli');
+  assert.deepEqual(errors,[]);console.log('İki ayrı tarayıcı oturumu, 10 soru, 3/10 (test referansı) ve gerekçe: başarılı');
  } finally { await browser.close(); }
 })().catch(e=>{console.error(e);process.exitCode=1});
