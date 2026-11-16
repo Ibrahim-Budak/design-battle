@@ -5,6 +5,7 @@ import '../../app/theme.dart';
 import '../../shared/layout.dart';
 import '../preview/domain/design_config.dart';
 import 'event_service.dart';
+import 'vote_confirmation.dart';
 
 class ParticipantEvent extends StatefulWidget {
   final String code;
@@ -19,6 +20,7 @@ class _ParticipantEventState extends State<ParticipantEvent> {
   String? error;
   bool loading = true, sending = false;
   int? selected, lastRound;
+  VoteCheck? voteCheck;
   late final Stream<DocumentSnapshot<Map<String, dynamic>>> eventStream;
   Stream<DocumentSnapshot<Map<String, dynamic>>>? ballotStream;
   int? ballotStreamRound;
@@ -64,19 +66,66 @@ class _ParticipantEventState extends State<ParticipantEvent> {
     }
   }
 
+  Future<String?> _readBallot(int q, int round) async {
+    final ballot = await service
+        .votes(widget.code, round)
+        .doc(user!.uid)
+        .get(const GetOptions(source: Source.server));
+    if (!ballot.exists) return null;
+    final data = ballot.data();
+    if (data == null ||
+        data['questionIndex'] != q ||
+        data['option'] is! String) {
+      throw const FormatException('Geçersiz oy belgesi');
+    }
+    return data['option'] as String;
+  }
+
   Future<void> vote(int q, int round, String option) async {
+    if (sending) return;
     setState(() {
       sending = true;
-      error = null;
+      voteCheck = null;
     });
-    try {
-      await service.submitVote(widget.code, user!.uid, q, round, option);
-    } catch (e) {
-      if (mounted) setState(() => error = 'Oy gönderilemedi: $e');
-    } finally {
-      if (mounted) setState(() => sending = false);
+    final result = await VoteConfirmation.submit(
+      send: () => service.submitVote(widget.code, user!.uid, q, round, option),
+      readFromServer: () => _readBallot(q, round),
+    );
+    if (mounted) {
+      setState(() {
+        sending = false;
+        if (lastRound == round) voteCheck = result;
+      });
     }
   }
+
+  Future<void> checkVote(int q, int round) async {
+    if (sending) return;
+    setState(() => sending = true);
+    final result = await VoteConfirmation.check(() => _readBallot(q, round));
+    if (mounted) {
+      setState(() {
+        sending = false;
+        if (lastRound == round) voteCheck = result;
+      });
+    }
+  }
+
+  Widget _recorded(String option) => Panel(
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Icon(Icons.check_circle_outline, size: 32),
+        const SizedBox(height: 14),
+        const Text(
+          'Oyun kaydedildi.',
+          style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        Text('Seçimin: $option · Sonraki soruyu bekle.'),
+      ],
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -116,6 +165,7 @@ class _ParticipantEventState extends State<ParticipantEvent> {
           selected = null;
           ballotStreamRound = null;
           ballotStream = null;
+          voteCheck = null;
           error = null;
         }
         if (status == 'completed') {
@@ -156,6 +206,9 @@ class _ParticipantEventState extends State<ParticipantEvent> {
           );
         }
         final allowed = List<String>.from(data['allowedOptions'] as List);
+        if (voteCheck?.status == VoteCheckStatus.recorded) {
+          return _recorded(voteCheck!.option!);
+        }
         if (ballotStreamRound != round) {
           ballotStreamRound = round;
           ballotStream = service
@@ -167,41 +220,52 @@ class _ParticipantEventState extends State<ParticipantEvent> {
           key: ValueKey(round),
           stream: ballotStream,
           builder: (context, v) {
+            final snap = v.data;
+            if (snap != null &&
+                !snap.metadata.isFromCache &&
+                !snap.metadata.hasPendingWrites &&
+                snap.exists) {
+              final ballot = snap.data();
+              if (ballot?['questionIndex'] == index &&
+                  ballot?['option'] is String &&
+                  const ['A', 'B', 'C'].contains(ballot?['option'])) {
+                return _recorded(ballot!['option'] as String);
+              }
+              return const Text('Oy belgesi doğrulanamadı.');
+            }
+            if (voteCheck?.status == VoteCheckStatus.unknown) {
+              return Panel(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Oyun durumu doğrulanamadı; oy kaydedilmiş olabilir. Bağlantınızı kontrol edip durumu tekrar sorgulayın.',
+                    ),
+                    const SizedBox(height: 12),
+                    FilledButton(
+                      onPressed: sending ? null : () => checkVote(index, round),
+                      child: Text(
+                        sending
+                            ? 'Kontrol ediliyor…'
+                            : 'Oy durumunu tekrar kontrol et',
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }
             if (v.hasError) {
               return const Text(
                 'Oy durumu alınamadı. Bağlantıyı kontrol edin.',
               );
             }
-            if (!v.hasData) {
+            if (snap == null) {
               return const Center(child: CircularProgressIndicator());
             }
-            if (v.data!.metadata.isFromCache ||
-                v.data!.metadata.hasPendingWrites) {
+            if (snap.metadata.isFromCache || snap.metadata.hasPendingWrites) {
               return const Panel(
                 child: Text(
                   'Sunucu bağlantısı ve oy durumu doğrulanıyor. Bağlantınız kesildiyse yeniden deneyin.',
-                ),
-              );
-            }
-            if (v.data!.exists) {
-              return Panel(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Icon(Icons.check_circle_outline, size: 32),
-                    const SizedBox(height: 14),
-                    const Text(
-                      'Oyun kaydedildi.',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Seçimin: ${v.data!.data()!['option']} · Sonraki soruyu bekle.',
-                    ),
-                  ],
                 ),
               );
             }
@@ -293,11 +357,11 @@ class _ParticipantEventState extends State<ParticipantEvent> {
                       ),
                     ),
                   ),
-                if (error != null)
+                if (voteCheck?.status == VoteCheckStatus.notFound)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 12),
                     child: Text(
-                      error!,
+                      'Sunucuda henüz oyunuz bulunamadı. Oylama açıksa yeniden deneyebilirsiniz.',
                       style: TextStyle(
                         color: Theme.of(context).colorScheme.error,
                         fontSize: 12,

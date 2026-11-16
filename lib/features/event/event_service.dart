@@ -82,6 +82,9 @@ class EventService {
     await db.runTransaction((tx) async {
       final current = (await tx.get(e)).data();
       final previous = await tx.get(ballot);
+      // Repeated attempts must never overwrite the immutable ballot. Treat an
+      // already recorded ballot as a no-op; the caller reads its actual value.
+      if (previous.exists) return;
       if (current == null ||
           current['status'] != 'active' ||
           current['questionStatus'] != 'open' ||
@@ -89,9 +92,6 @@ class EventService {
           current['round'] != expectedRound ||
           !(current['allowedOptions'] as List).contains(option)) {
         throw StateError('Oylama artık açık değil.');
-      }
-      if (previous.exists) {
-        throw StateError('Bu tur için zaten oy kullandınız.');
       }
       tx.set(ballot, {
         'option': option,
