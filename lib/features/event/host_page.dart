@@ -358,7 +358,11 @@ class _HostPageState extends State<HostPage> {
                                             onPressed: busy
                                                 ? null
                                                 : () => action(
-                                                    () => service.close(code),
+                                                    () => service.close(
+                                                      code,
+                                                      question: index,
+                                                      round: round,
+                                                    ),
                                                   ),
                                             child: const Text('Oylamayı kapat'),
                                           ),
@@ -368,10 +372,14 @@ class _HostPageState extends State<HostPage> {
                                             onPressed: busy
                                                 ? null
                                                 : () => action(
-                                                    () => service.settle(code),
+                                                    () => service.settle(
+                                                      code,
+                                                      question: index,
+                                                      round: round,
+                                                    ),
                                                   ),
                                             child: const Text(
-                                              'Sonuçları tekrar hesapla',
+                                              'Sonuçları göster',
                                             ),
                                           ),
                                         if (status == 'active')

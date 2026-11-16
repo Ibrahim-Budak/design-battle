@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../preview/domain/design_config.dart';
+import 'settlement_gate.dart';
 
 /// The admin is trusted. Ballots are immutable; totals are derived from the
 /// server's vote documents, never from participant-supplied counters.
@@ -129,28 +130,52 @@ class EventService {
     });
   }
 
-  Future<void> close(String id) async {
+  Future<void> close(
+    String id, {
+    required int question,
+    required int round,
+  }) async {
     await db.runTransaction((tx) async {
       final e = event(id), data = (await tx.get(e)).data();
       if (data == null ||
           data['status'] != 'active' ||
-          data['questionStatus'] != 'open') {
+          data['questionIndex'] != question ||
+          data['round'] != round) {
+        throw StateError('Etkinlik veya soru durumu değişti.');
+      }
+      // A retry must never close a different or already finalized round.
+      if (['settling', 'tie', 'closed'].contains(data['questionStatus'])) {
+        return;
+      }
+      if (data['questionStatus'] != 'open') {
         throw StateError('Açık bir oylama yok.');
       }
       tx.update(e, {'questionStatus': 'settling'});
     });
-    await settle(id);
+    await settle(id, question: question, round: round);
   }
 
-  Future<void> settle(String id) async {
-    final snapshot = await event(
-      id,
-    ).get(const GetOptions(source: Source.server));
-    final data = snapshot.data();
-    if (data == null || data['questionStatus'] != 'settling') {
-      throw StateError('Hesaplanacak oylama yok.');
-    }
-    final round = data['round'] as int;
+  Future<void> settle(
+    String id, {
+    required int question,
+    required int round,
+  }) async {
+    // Do not count until a non-cached, server-confirmed snapshot proves that
+    // this particular round has stopped accepting ballots.
+    final data = await waitForSettlement(
+      question: question,
+      round: round,
+      snapshots: event(id)
+          .snapshots(includeMetadataChanges: true)
+          .map(
+            (snap) => SettlementSnapshot(
+              data: snap.data(),
+              fromCache: snap.metadata.isFromCache,
+              hasPendingWrites: snap.metadata.hasPendingWrites,
+            ),
+          ),
+    );
+    if (data == null) return; // This round was already finalized.
     final docs = await votes(
       id,
       round,

@@ -4,7 +4,7 @@ const { chromium } = require('playwright');
 const { PNG } = require('pngjs');
 const jsQR = require('jsqr');
 const { initializeTestEnvironment } = require('@firebase/rules-unit-testing');
-const { doc, setDoc, getDoc } = require('firebase/firestore');
+const { doc, setDoc, getDoc, updateDoc } = require('firebase/firestore');
 const assert = require('node:assert/strict');
 const { createHash } = require('node:crypto');
 const base = 'http://localhost:8087/';
@@ -24,6 +24,11 @@ async function vote(page, option) {
   await click(page,'Oyumu gönder');
   try { await waitText(page,'Oyun kaydedildi.'); }
   catch(e) { console.error('Katılımcı durumu:', await page.locator('body').innerText()); throw e; }
+}
+async function simulateInterruptedClose(id) {
+  const env=await initializeTestEnvironment({projectId:'demo-design-battle',firestore:{host:'127.0.0.1',port:8085}});
+  try { await env.withSecurityRulesDisabled(async c => updateDoc(doc(c.firestore(),`events/${id}`),{questionStatus:'settling'})); }
+  finally { await env.cleanup(); }
 }
 async function seed() {
   if (!process.env.FIRESTORE_EMULATOR_HOST || !process.env.FIREBASE_AUTH_EMULATOR_HOST) throw new Error('Yalnızca Firebase emülatörleriyle çalıştırın.');
@@ -88,11 +93,15 @@ async function seed() {
       const after=await host.screenshot({clip:{x:945,y:125,width:310,height:650}});
       const digest=x=>createHash('sha256').update(x).digest('hex');assert.notEqual(digest(before),digest(after),'Önizleme yenilenmedi');
     } else if(q===2) {
-      await vote(a,'A');await vote(b,'B');await click(host,'Oylamayı kapat');await waitText(host,'Beraberlik var');
+      await vote(a,'A');await vote(b,'B');await waitText(host,'1 oy · %50');
+      // Simulate a host reconnect after closing but before calculating.
+      await simulateInterruptedClose(id);await waitText(host,'Sonuçları göster');
+      await click(host,'Sonuçları göster');await waitText(host,'Beraberlik var');
       await click(host,'B manuel seç');await waitText(host,'Sonraki soru');
     } else {
       await vote(a,'B');await vote(b,'B');await waitText(host,'2 oy · %100');await click(host,'Oylamayı kapat');await waitText(host,q===10?'Etkinliği bitir':'Sonraki soru');
     }
+    assert.equal((await host.locator('body').innerText()).includes('İşlem tamamlanamadı'),false,'Yönetici hata mesajı gösterildi');
     await click(host,q===10?'Etkinliği bitir':'Sonraki soru');
     await waitText(host,q===10?'Sonuçları göster':'Oylamayı aç');console.log(`Soru ${q} tamamlandı`);
   }
